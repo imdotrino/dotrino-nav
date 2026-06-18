@@ -1,0 +1,53 @@
+{
+  "name": "@dotrino/nav",
+  "version": "0.2.1",
+  "description": "Navegación \"volver\" unificada del ecosistema Dotrino: controlador de pila (modal → pestaña → página anterior → dotrino.com) que intercepta el botón físico de Android / gesto de iOS / atrás del navegador, más el Web Component <dotrino-back> (chevron de header). Sin JS de terceros ni cookies.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "types": "src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./vue": {
+      "types": "./src/vue.d.ts",
+      "import": "./src/vue.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "peerDependencies": {
+    "vue": ">=3.3.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "dotrino",
+    "web-component",
+    "custom-element",
+    "back",
+    "navigation",
+    "history",
+    "popstate",
+    "android-back",
+    "pwa",
+    "cross-app"
+  ],
+  "author": "seyacat",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imdotrino/dotrino-nav.git"
+  }
+}
