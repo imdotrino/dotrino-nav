@@ -16,8 +16,10 @@
  *
  *        modal abierto  →  ciérralo
  *        historial de pestañas/vistas  →  vuelve a la anterior
- *        sin historial interno  →  página anterior del navegador
- *        sin página anterior  →  dotrino.com
+ *        página anterior en ESTA pestaña  →  vuelve a ella
+ *        sin página anterior (pestaña nueva target="_blank" / PWA standalone)
+ *              →  cierra la pestaña si el navegador lo permite (vuelve a la
+ *                 pestaña de origen), o va a dotrino.com
  *
  *  2. <dotrino-back> — un Web Component (custom element, Shadow DOM, sin
  *     JS de terceros) con el chevron de volver para poner arriba a la izquierda
@@ -80,17 +82,30 @@ export function createBackNav (opts = {}) {
   // cerrar una capa programáticamente con history.back()).
   let suppress = 0
 
-  // ¿Hay una página real anterior a la que volver (req. 3) o vamos directo a
-  // dotrino.com (req. 4)? En una PWA lanzada standalone normalmente no hay
-  // referrer → vamos a dotrino.com, que es justo lo que falta hoy en iOS.
+  // ¿Hay una página real anterior EN ESTA PESTAÑA a la que volver (req. 3), o hay
+  // que cerrar la pestaña / ir a dotrino.com (req. 4)? Se mide el largo del
+  // historial ANTES de empujar el centinela: una pestaña recién abierta (nueva
+  // pestaña con target="_blank" / window.open, o PWA standalone) arranca su
+  // historial en 1 → no hay adónde volver dentro de la pestaña.
+  // Ojo: `document.referrer` NO sirve para esto — una pestaña abierta con
+  // target="_blank" SÍ trae referrer (la página que la abrió), pero su historial
+  // propio no tiene página anterior, así que `history.back()` sería un no-op y el
+  // botón de volver "no haría nada" (el bug de la pestaña nueva).
   const hadPrev = (() => {
-    try {
-      const r = document.referrer
-      return !!r && r !== location.href
-    } catch (_) {
-      return false
-    }
+    try { return history.length > 1 } catch (_) { return false }
   })()
+
+  // Pestaña sin página anterior propia (abierta con target="_blank"/window.open, o
+  // PWA standalone). Al "volver": intentar CERRARLA —así se vuelve a la pestaña de
+  // origen—, y si el navegador no lo permite (no la abrió un script, o el centinela
+  // dejó más de una entrada), ir a `home` (dotrino.com). El orden respeta el pedido:
+  // cerrar si se puede, o a dotrino.com.
+  function goHomeOrClose () {
+    try { window.close() } catch (_) {}
+    // window.close() es best-effort y NO lanza si el navegador lo bloquea: si la
+    // pestaña sigue viva tras un instante, salimos a `home`.
+    setTimeout(() => { try { location.href = home } catch (_) {} }, 150)
+  }
 
   function runClose (layer) {
     try {
@@ -118,11 +133,12 @@ export function createBackNav (opts = {}) {
     }
     // Sin capas internas: estamos en el centinela base. Decidimos req. 3 / 4.
     if (hadPrev) {
-      // Hay página anterior real del navegador: sal hacia ella.
-      try { history.back() } catch (_) { location.href = home }
+      // Hay página anterior real en esta pestaña: sal hacia ella.
+      try { history.back() } catch (_) { goHomeOrClose() }
     } else {
-      // Standalone / sin referrer: a dotrino.com.
-      location.href = home
+      // Pestaña nueva (target="_blank") o standalone, sin página anterior propia:
+      // cerrarla si se puede (volver a la pestaña de origen), o ir a dotrino.com.
+      goHomeOrClose()
     }
   }
 
