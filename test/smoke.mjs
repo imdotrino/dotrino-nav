@@ -9,6 +9,9 @@ const html = `<!doctype html><html lang="es"><body>
 <dotrino-back id="chev"></dotrino-back>
 <script type="module">
   import { createBackNav, getBackNav } from '/src/index.js'
+  // Lo que ve hadPrev: el largo del historial ANTES del centinela. Despues ya
+  // no se puede distinguir "pestana nueva" de "pestana con pagina anterior".
+  window.lenPrevio = history.length
   window.calls = []
   window._handles = {}
   // home en el mismo server para poder afirmar la navegación de fallback.
@@ -63,6 +66,9 @@ results.chevLabel = await page.evaluate(() =>
   document.querySelector('#chev').shadowRoot.querySelector('button').getAttribute('aria-label'),
 )
 results.singletonLinked = await page.evaluate(() => window.getBackNav() === window.nav)
+// Esta pestaña SÍ tiene página anterior (`about:blank`, la inicial de Playwright):
+// el paso 7 depende de eso, así que se deja afirmado y no supuesto.
+results.conPaginaAnterior = await page.evaluate(() => window.lenPrevio)
 
 // 2. abrir una capa la pone en la pila; el botón físico de volver la cierra
 //    (llama onClose) y NO sale de la app.
@@ -112,10 +118,51 @@ results.routeUrlBackCalls = await page.evaluate(() => window.calls.slice())
 results.routeUrlRestored = page.url() === baseUrl
 results.routeUrlSize = await page.evaluate(() => window.nav.size())
 
-// 7. sin capas y sin página anterior (referrer vacío) → el volver navega a home
+// 7. Pestaña SIN página anterior propia (abierta con window.open / target=_blank,
+//    o PWA standalone): history.length === 1 y no hay adónde volver DENTRO de la
+//    pestaña. El pedido es "cerrarla si se puede, o ir a dotrino.com".
+//
+//    Esta condición hay que montarla a propósito, y ahí estaba el fallo: una
+//    pestaña abierta con `page.goto()` arranca en `about:blank`, así que su
+//    `history.length` ya es 2 cuando carga la app → `hadPrev` es true. El test
+//    afirmaba `wentHome: true` sobre esa pestaña y fallaba siempre, porque pedía
+//    el camino de "pestaña nueva" en una que sí tenía página anterior. Con
+//    `window.open()` la pestaña arranca directamente en la app: history.length 1.
+const ctx = page.context()
+const abrirEnPestanaNueva = async (prep) => {
+  const [nueva] = await Promise.all([
+    ctx.waitForEvent('page'),
+    page.evaluate((u) => window.open(u, '_blank'), baseUrl),
+  ])
+  await nueva.waitForLoadState()
+  if (prep) await nueva.evaluate(prep)
+  await nueva.waitForFunction(() => window.nav, null, { timeout: 5000 })
+  return nueva
+}
+
+//    7a. La abrió un script, así que window.close() SÍ funciona: al volver se
+//        cierra, y el usuario aterriza en la pestaña de origen.
+const pestanaNueva = await abrirEnPestanaNueva(null)
+results.sinPaginaAnterior = await pestanaNueva.evaluate(() => window.lenPrevio)   // 1
+await pestanaNueva.evaluate(() => history.back()).catch(() => {})
+await page.waitForTimeout(400)
+results.pestanaCerrada = pestanaNueva.isClosed()
+
+//    7b. Mismo caso con window.close() bloqueado: es best-effort y el navegador
+//        puede negarse SIN lanzar, así que entra el fallback a `home`. Sin este
+//        caso, la rama que de verdad lleva a dotrino.com no la prueba nadie.
+const pestanaBloqueada = await abrirEnPestanaNueva(() => { window.close = () => {} })
+await pestanaBloqueada.evaluate(() => history.back())
+await pestanaBloqueada.waitForURL(/\/home\.html$/, { timeout: 5000 }).catch(() => {})
+results.wentHome = pestanaBloqueada.url().endsWith('/home.html')
+await pestanaBloqueada.close()
+
+// 8. Sin capas y CON página anterior en esta pestaña (es el caso de `page`, ver
+//    arriba): el volver sale de la app hacia ella, ni se queda atrapado ni se va
+//    a `home`. Va el último porque abandona la página.
 await back()
-await page.waitForTimeout(120)
-results.wentHome = page.url().endsWith('/home.html')
+await page.waitForTimeout(200)
+results.saleDeLaApp = page.url() !== baseUrl
 
 await browser.close()
 server.close()
@@ -141,7 +188,11 @@ const expect = {
   routeUrlBackCalls: ['r'],
   routeUrlRestored: true,
   routeUrlSize: 0,
+  conPaginaAnterior: 2,
+  sinPaginaAnterior: 1,
+  pestanaCerrada: true,
   wentHome: true,
+  saleDeLaApp: true,
 }
 
 let ok = true
