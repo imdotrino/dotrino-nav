@@ -103,6 +103,22 @@ const aboutOpen = ref(false)
 useBackLayer(aboutOpen, { url: '/que-es' }) // string o función que lo devuelva
 ```
 
+## Cómo decide (y por qué no cuenta eventos)
+
+El controlador **no lleva la cuenta de los `popstate`**: lee `history.state.ccNav` de
+la entrada en la que acaba de caer (`base`, o el número de capa) y ajusta la pila a
+eso. `history.back()` es asíncrono, y contar eventos se desfasaba en cuanto una capa se
+abría mientras el `back()` de otra estaba en vuelo — la capa nueva quedaba «adelante» y
+el siguiente volver salía de la app (visto en eco, 2026-08-22). Tres reglas:
+
+- abrir/cerrar mientras un `back()` nuestro está en vuelo **se encola** hasta que llega
+  su `popstate`;
+- cerrar una capa solo retira entradas de history si **de verdad estamos sobre la
+  suya** (`history.state` lo dice); si no, se cierra en la pila y el historial se deja
+  en paz;
+- una entrada sin estado nuestro con **otra URL** (un `location.hash = …` de la app) se
+  adopta como capa transparente, en vez de tomarla por «el usuario quiere salir».
+
 ## Test
 
 ```

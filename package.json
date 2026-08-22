@@ -1,7 +1,7 @@
 {
   "name": "@dotrino/nav",
-  "version": "0.2.2",
-  "description": "Navegaci\u00f3n \"volver\" unificada del ecosistema Dotrino: controlador de pila (modal \u2192 pesta\u00f1a \u2192 p\u00e1gina anterior \u2192 dotrino.com) que intercepta el bot\u00f3n f\u00edsico de Android / gesto de iOS / atr\u00e1s del navegador, m\u00e1s el Web Component <dotrino-back> (chevron de header). Sin JS de terceros ni cookies.",
+  "version": "0.3.0",
+  "description": "Navegación \"volver\" unificada del ecosistema Dotrino: controlador de pila (modal → pestaña → página anterior → dotrino.com) que intercepta el botón físico de Android / gesto de iOS / atrás del navegador, más el Web Component <dotrino-back> (chevron de header). Sin JS de terceros ni cookies.",
   "type": "module",
   "main": "src/index.js",
   "module": "src/index.js",

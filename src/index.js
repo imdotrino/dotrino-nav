@@ -76,11 +76,14 @@ export function createBackNav (opts = {}) {
   const home = opts.home || HOME_DEFAULT
   const trap = opts.trap !== false
 
-  /** @type {{ onClose: Function, _gone: boolean }[]} pila LIFO de capas. */
+  /** @type {{ onClose: Function, depth: number }[]} pila LIFO de capas. */
   const layers = []
-  // Número de popstate que debemos IGNORAR (los que disparamos nosotros al
-  // cerrar una capa programáticamente con history.back()).
-  let suppress = 0
+  // Traversals que disparamos nosotros (history.back() al cerrar una capa) y cuyo
+  // popstate aún no llegó. Mientras haya uno en vuelo, abrir/cerrar se ENCOLA:
+  // history.back() es asíncrono y un pushState en medio corrompe la pila (la capa
+  // nueva queda "adelante" y el siguiente back sale de la app).
+  let inflight = 0
+  const queued = []
 
   // ¿Hay una página real anterior EN ESTA PESTAÑA a la que volver (req. 3), o hay
   // que cerrar la pestaña / ir a dotrino.com (req. 4)? Se mide el largo del
@@ -116,22 +119,48 @@ export function createBackNav (opts = {}) {
     }
   }
 
-  function onPop () {
-    if (suppress > 0) {
-      suppress--
+  /** Profundidad que dice la entrada de history en la que estamos: 0 = centinela
+   *  base, n = capa n, -1 = por debajo del centinela (fuera de lo nuestro). */
+  function depthOf (state) {
+    const v = state && state.ccNav
+    if (v === 'base') return 0
+    if (typeof v === 'number' && v > 0) return v
+    return -1
+  }
+
+  /** Cierra (sin tocar history) todas las capas por encima de `depth`. */
+  function closeAbove (depth) {
+    while (layers.length > Math.max(0, depth)) runClose(layers.pop())
+  }
+
+  function onPop (ev) {
+    const depth = depthOf(ev && ev.state)
+    if (inflight > 0) {
+      // Llegó el popstate de un back() nuestro. La pila ya se ajustó al cerrar; solo
+      // se vacía la cola de lo que quedó esperando a que el historial se asentara.
+      inflight--
+      if (inflight === 0) { while (queued.length) queued.shift()() }
       return
     }
-    if (layers.length) {
-      // El botón de volver consumió la entrada de history de la capa de arriba:
-      // ciérrala. La marcamos _gone para que el cierre que dispara la app (p.ej.
-      // un watcher de Vue que pone el ref en false) NO intente sacar otra
-      // entrada de history.
-      const layer = layers.pop()
-      layer._gone = true
-      runClose(layer)
+    if (depth >= 0) {
+      // Seguimos dentro de lo nuestro: la entrada dice cuántas capas quedan vivas
+      // (un gesto de volver = una capa; una traversal de varias entradas, las que
+      // toque). Con estado y no contando eventos no hay manera de desfasarse.
+      closeAbove(depth)
       return
     }
-    // Sin capas internas: estamos en el centinela base. Decidimos req. 3 / 4.
+    // Entrada sin estado nuestro. Si la URL no es la del centinela, no es la página
+    // de abajo: es una entrada que alguien empujó ENCIMA (un `location.hash = …` de
+    // la app, por ejemplo). Se adopta como una capa más, transparente, para que el
+    // historial siga casando con la pila y el siguiente volver no salga de la app.
+    if (trap && baseHref && location.href !== baseHref) {
+      const layer = { onClose: null, depth: layers.length + 1 }
+      layers.push(layer)
+      try { history.replaceState({ ccNav: layer.depth }, '') } catch (_) {}
+      return
+    }
+    // Por debajo del centinela base: el usuario quiere SALIR. Decidimos req. 3 / 4.
+    closeAbove(0)
     if (hadPrev) {
       // Hay página anterior real en esta pestaña: sal hacia ella.
       try { history.back() } catch (_) { goHomeOrClose() }
@@ -142,12 +171,21 @@ export function createBackNav (opts = {}) {
     }
   }
 
+  // URL del centinela: sirve para distinguir "la página de abajo" (misma URL que
+  // la nuestra) de una entrada ajena empujada encima (ver onPop).
+  let baseHref = ''
   if (trap) {
     // Centinela base: una entrada extra para atrapar el PRIMER "volver" cuando
     // no hay capas, y así poder enrutar a dotrino.com en vez de quedar atrapado
     // (el bug de iOS). Misma URL → es una entrada same-document, no recarga.
-    try { history.pushState({ ccNav: 'base' }, '') } catch (_) {}
+    try { history.pushState({ ccNav: 'base' }, ''); baseHref = location.href } catch (_) {}
     window.addEventListener('popstate', onPop)
+  }
+
+  /** Ejecuta ya, o cuando se asiente el back() que está en vuelo. */
+  function settled (fn) {
+    if (trap && inflight > 0) queued.push(fn)
+    else fn()
   }
 
   /**
@@ -165,16 +203,19 @@ export function createBackNav (opts = {}) {
    *                   actual (comportamiento clásico de modal).
    */
   function open (onClose, opts = {}) {
-    const layer = { onClose, _gone: false }
-    layers.push(layer)
-    if (trap) {
-      // url='' (o ausente) = misma URL (entrada same-document para atrapar el
-      // volver sin tocar la barra de direcciones). Con url → routing real.
-      const url = opts.url == null ? '' : String(opts.url)
-      try { history.pushState({ ccNav: layers.length }, '', url) } catch (_) {}
-    }
+    const layer = { onClose, depth: 0 }
+    settled(() => {
+      layer.depth = layers.length + 1
+      layers.push(layer)
+      if (trap) {
+        // url='' (o ausente) = misma URL (entrada same-document para atrapar el
+        // volver sin tocar la barra de direcciones). Con url → routing real.
+        const url = opts.url == null ? '' : String(opts.url)
+        try { history.pushState({ ccNav: layer.depth }, '', url) } catch (_) {}
+      }
+    })
     return {
-      close () { dismiss(layer) },
+      close () { settled(() => dismiss(layer)) },
       get active () { return layers.indexOf(layer) !== -1 }
     }
   }
@@ -183,22 +224,29 @@ export function createBackNav (opts = {}) {
   function dismiss (layer) {
     const idx = layers.indexOf(layer)
     if (idx === -1) return // ya estaba cerrada (p.ej. por el botón físico)
-    layers.splice(idx, 1)
-    if (trap && !layer._gone) {
-      // Quita la entrada de history que empujamos al abrir, sin re-disparar el
-      // cierre (lo ignoramos vía suppress).
-      suppress++
-      try { history.back() } catch (_) { suppress-- }
-    }
-    runClose(layer)
+    // Se cierra esta y todo lo que tuviera encima (cerrar por debajo deja capas
+    // huérfanas cuyas entradas de history ya no casan con nada).
+    const above = layers.length - idx
+    while (layers.length > idx) runClose(layers.pop())
+    if (!trap) return
+    // Solo se retiran entradas de history si de verdad ESTAMOS sobre la de la capa
+    // de arriba. Si el historial está en otra parte (un back() ajeno, un hash que
+    // cambió alguien), retirar a ciegas es lo que saca de la app.
+    let cur = -1
+    try { cur = depthOf(history.state) } catch (_) {}
+    if (cur !== idx + above) return
+    inflight++
+    try { history.go(-above) } catch (_) { inflight-- }
   }
 
   /** Volver programático (lo usa el chevron): idéntico al botón físico. */
   function back () {
     if (trap) {
-      try { history.back() } catch (_) { onPop() }
+      try { history.back() } catch (_) { onPop({ state: null }) }
     } else {
-      onPop()
+      // Sin trampa (tests): simula el gesto sobre la pila, sin history.
+      if (layers.length) runClose(layers.pop())
+      else if (hadPrev) { try { history.back() } catch (_) { goHomeOrClose() } } else goHomeOrClose()
     }
   }
 

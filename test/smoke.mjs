@@ -118,6 +118,42 @@ results.routeUrlBackCalls = await page.evaluate(() => window.calls.slice())
 results.routeUrlRestored = page.url() === baseUrl
 results.routeUrlSize = await page.evaluate(() => window.nav.size())
 
+// 6c. CARRERAS con history.back() (asíncrono). Visto en eco (2026-08-22): abrir un
+//     enlace en una pestaña con historial rebotaba a la página anterior. El
+//     controlador ya no cuenta popstates: lee `history.state` y encola lo que llega
+//     mientras un back() nuestro está en vuelo. Cada secuencia termina en la app,
+//     con la pila vacía y el historial en el centinela base.
+const seq = async (name, fn) => {
+  await page.evaluate(() => { window.calls = [] })
+  await page.evaluate(fn)
+  await page.waitForTimeout(250)
+  results['race_' + name] = [page.url() === baseUrl, await page.evaluate(() => window.nav.size()), await page.evaluate(() => history.state && history.state.ccNav)]
+}
+await seq('closeThenOpen', () => { window.openLayer('a') })
+await page.waitForTimeout(40)
+await page.evaluate(() => { window.closeLayer('a'); window.openLayer('b') })
+await page.waitForTimeout(60)
+await page.evaluate(() => window.closeLayer('b'))
+await page.waitForTimeout(250)
+results.race_closeThenOpen = [page.url() === baseUrl, await page.evaluate(() => window.nav.size()), await page.evaluate(() => history.state && history.state.ccNav)]
+await seq('oneTick', () => { window.openLayer('a'); window.closeLayer('a'); window.openLayer('b'); window.closeLayer('b') })
+await seq('closeLowerFirst', () => { window.openLayer('a'); window.openLayer('b'); window.closeLayer('a') })
+//     Un popstate de varias entradas (history.go(-2)) cierra las dos capas de golpe.
+await page.evaluate(() => { window.calls = []; window.openLayer('a'); window.openLayer('b') })
+await page.waitForTimeout(40)
+await page.evaluate(() => history.go(-2))
+await page.waitForTimeout(250)
+results.race_go2 = [page.url() === baseUrl, await page.evaluate(() => window.nav.size()), await page.evaluate(() => window.calls.slice())]
+//     Si alguien ajeno movió el historial (un hash), cerrar la capa NO retira
+//     entradas a ciegas: la app no se va.
+await page.evaluate(() => { window.openLayer('a') })
+await page.waitForTimeout(40)
+await page.evaluate(() => { location.hash = '#otra' })
+await page.waitForTimeout(60)
+await page.evaluate(() => window.closeLayer('a'))
+await page.waitForTimeout(250)
+results.race_foreignHash = [page.url() === baseUrl, await page.evaluate(() => window.nav.size()), await page.evaluate(() => history.state && history.state.ccNav)]
+
 // 7. Pestaña SIN página anterior propia (abierta con window.open / target=_blank,
 //    o PWA standalone): history.length === 1 y no hay adónde volver DENTRO de la
 //    pestaña. El pedido es "cerrarla si se puede, o ir a dotrino.com".
@@ -193,6 +229,11 @@ const expect = {
   pestanaCerrada: true,
   wentHome: true,
   saleDeLaApp: true,
+  race_closeThenOpen: [true, 0, 'base'],
+  race_oneTick: [true, 0, 'base'],
+  race_closeLowerFirst: [true, 0, 'base'],
+  race_go2: [true, 0, ['b', 'a']],
+  race_foreignHash: [true, 0, 'base'],
 }
 
 let ok = true
