@@ -11,7 +11,7 @@ const html = `<!doctype html><html lang="es"><body>
   import { createBackNav, getBackNav } from '/src/index.js'
   // Lo que ve hadPrev: el largo del historial ANTES del centinela. Despues ya
   // no se puede distinguir "pestana nueva" de "pestana con pagina anterior".
-  window.lenPrevio = history.length
+  window.prevHistoryLen = history.length
   window.calls = []
   window._handles = {}
   // home en el mismo server para poder afirmar la navegación de fallback.
@@ -68,7 +68,7 @@ results.chevLabel = await page.evaluate(() =>
 results.singletonLinked = await page.evaluate(() => window.getBackNav() === window.nav)
 // Esta pestaña SÍ tiene página anterior (`about:blank`, la inicial de Playwright):
 // el paso 7 depende de eso, así que se deja afirmado y no supuesto.
-results.conPaginaAnterior = await page.evaluate(() => window.lenPrevio)
+results.withPreviousPage = await page.evaluate(() => window.prevHistoryLen)
 
 // 2. abrir una capa la pone en la pila; el botón físico de volver la cierra
 //    (llama onClose) y NO sale de la app.
@@ -165,7 +165,7 @@ results.race_foreignHash = [page.url() === baseUrl, await page.evaluate(() => wi
 //    el camino de "pestaña nueva" en una que sí tenía página anterior. Con
 //    `window.open()` la pestaña arranca directamente en la app: history.length 1.
 const ctx = page.context()
-const abrirEnPestanaNueva = async (prep) => {
+const openInNewTab = async (prep) => {
   const [nueva] = await Promise.all([
     ctx.waitForEvent('page'),
     page.evaluate((u) => window.open(u, '_blank'), baseUrl),
@@ -178,27 +178,27 @@ const abrirEnPestanaNueva = async (prep) => {
 
 //    7a. La abrió un script, así que window.close() SÍ funciona: al volver se
 //        cierra, y el usuario aterriza en la pestaña de origen.
-const pestanaNueva = await abrirEnPestanaNueva(null)
-results.sinPaginaAnterior = await pestanaNueva.evaluate(() => window.lenPrevio)   // 1
-await pestanaNueva.evaluate(() => history.back()).catch(() => {})
+const newTab = await openInNewTab(null)
+results.withoutPreviousPage = await newTab.evaluate(() => window.prevHistoryLen)   // 1
+await newTab.evaluate(() => history.back()).catch(() => {})
 await page.waitForTimeout(400)
-results.pestanaCerrada = pestanaNueva.isClosed()
+results.tabClosed = newTab.isClosed()
 
 //    7b. Mismo caso con window.close() bloqueado: es best-effort y el navegador
 //        puede negarse SIN lanzar, así que entra el fallback a `home`. Sin este
 //        caso, la rama que de verdad lleva a dotrino.com no la prueba nadie.
-const pestanaBloqueada = await abrirEnPestanaNueva(() => { window.close = () => {} })
-await pestanaBloqueada.evaluate(() => history.back())
-await pestanaBloqueada.waitForURL(/\/home\.html$/, { timeout: 5000 }).catch(() => {})
-results.wentHome = pestanaBloqueada.url().endsWith('/home.html')
-await pestanaBloqueada.close()
+const blockedTab = await openInNewTab(() => { window.close = () => {} })
+await blockedTab.evaluate(() => history.back())
+await blockedTab.waitForURL(/\/home\.html$/, { timeout: 5000 }).catch(() => {})
+results.wentHome = blockedTab.url().endsWith('/home.html')
+await blockedTab.close()
 
 // 8. Sin capas y CON página anterior en esta pestaña (es el caso de `page`, ver
 //    arriba): el volver sale de la app hacia ella, ni se queda atrapado ni se va
 //    a `home`. Va el último porque abandona la página.
 await back()
 await page.waitForTimeout(200)
-results.saleDeLaApp = page.url() !== baseUrl
+results.leavesTheApp = page.url() !== baseUrl
 
 await browser.close()
 server.close()
@@ -224,11 +224,11 @@ const expect = {
   routeUrlBackCalls: ['r'],
   routeUrlRestored: true,
   routeUrlSize: 0,
-  conPaginaAnterior: 2,
-  sinPaginaAnterior: 1,
-  pestanaCerrada: true,
+  withPreviousPage: 2,
+  withoutPreviousPage: 1,
+  tabClosed: true,
   wentHome: true,
-  saleDeLaApp: true,
+  leavesTheApp: true,
   race_closeThenOpen: [true, 0, 'base'],
   race_oneTick: [true, 0, 'base'],
   race_closeLowerFirst: [true, 0, 'base'],
@@ -242,11 +242,11 @@ for (const [k, v] of Object.entries(expect)) {
   const want = JSON.stringify(v)
   const pass = got === want
   if (!pass) ok = false
-  console.log(`${pass ? '✓' : '✗'} ${k}: ${got}${pass ? '' : ` (esperado ${want})`}`)
+  console.log(`${pass ? '✓' : '✗'} ${k}: ${got}${pass ? '' : ` (expected ${want})`}`)
 }
 if (errors.length) {
   ok = false
-  console.log('Errores de página:', errors)
+  console.log('Page errors:', errors)
 }
-console.log(ok ? '\nTODOS LOS TESTS PASARON' : '\nFALLARON TESTS')
+console.log(ok ? '\nALL TESTS PASSED' : '\nTESTS FAILED')
 process.exit(ok ? 0 : 1)
